@@ -20,13 +20,15 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            python3
+            (python3.withPackages (ps: with ps; [
+              textual
+            ]))
             krabby
           ];
 
           shellHook = ''
             echo "Welcome to PokeCatcherShell!"
-            echo "Run 'python main.py' or './run.sh' to start catching pokemons."
+            echo "Run 'python main.py' or 'python tui.py' to start catching pokemons."
           '';
         };
       }
