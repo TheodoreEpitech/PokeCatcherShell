@@ -54,11 +54,18 @@ except Exception as e:
 # Pokemon Class
 #-------------------------
 class Pokemon():
-    def __init__(self, name, shiny=False, level=1):
+    def __init__(self, name, shiny=False, level=1, xp=0, hp=None):
         self.name = name
         self.shiny = shiny
         self.level = level
         self.id = pokemons.index(name) + 1
+        self.xp = xp
+        self.xp_to_next_level = self.level * 10
+        self.max_hp = self.level * 10 + 50
+        if hp is None:
+            self.hp = self.max_hp
+        else:
+            self.hp = hp
     
     def __str__(self):
         return self.name
@@ -67,9 +74,30 @@ class Pokemon():
         if (randint(1, 100) > 100 - shiny_rate):
             self.shiny = True
         self.level = randint(1, max_lvl)
+        self.xp = 0
+        self.xp_to_next_level = self.level * 10
+        self.max_hp = self.level * 10 + 50
+        self.hp = self.max_hp
 
     def roll_catch(self):
-        return (randint(1, max_lvl) >= self.level / catch_rate)
+        # Scale catch rate based on HP percentage
+        hp_ratio = self.hp / self.max_hp
+        effective_level = max(1, int(self.level * hp_ratio))
+        return (randint(1, max_lvl) >= effective_level / catch_rate)
+
+    def gain_xp(self, amount):
+        if self.level >= max_lvl:
+            return False
+        self.xp += amount
+        leveled_up = False
+        while self.xp >= self.xp_to_next_level and self.level < max_lvl:
+            self.xp -= self.xp_to_next_level
+            self.level += 1
+            self.xp_to_next_level = self.level * 10
+            self.max_hp = self.level * 10 + 50
+            self.hp = self.max_hp  # Fully heal on level up
+            leveled_up = True
+        return leveled_up
 
     def get_sprite(self, include_info=False):
         args_list = ['krabby', 'name', self.name]
@@ -92,7 +120,9 @@ class Pokemon():
         return {
             "name": self.name,
             "shiny": self.shiny,
-            "level": self.level
+            "level": self.level,
+            "xp": self.xp,
+            "hp": self.hp
         }
 
 #-------------------------
@@ -122,7 +152,7 @@ def save_team_in_pokedex(team, pokedex):
         elif (pokedex[pokemon_id]["shiny"] and poke.shiny and pokedex[pokemon_id]["level"] < poke.level):
             pokedex[pokemon_id] = poke.dump()
     
-    pokedex = dict(sorted(pokedex.items()))
+    pokedex = dict(sorted(pokedex.items(), key=lambda item: int(item[0])))
     with open("pokedex.json", "w") as file:
         json.dump(pokedex, file)
     return pokedex
@@ -144,8 +174,95 @@ class VictoryScreen(Screen):
             
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-restart":
-            self.app.restart_journey()
-            self.dismiss()
+            event.button.disabled = True
+            self.dismiss(result="restart")
+
+#-------------------------
+# Game Over Screen
+#-------------------------
+class GameOverScreen(Screen):
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="gameover-panel fainted-panel"):
+            yield Static("☠ GAME OVER ☠", classes="gameover-title fainted-title")
+            yield Static("All your Pokémon have fainted!", classes="gameover-subtitle")
+            yield Static("Your journey has ended. Train hard, take care of your partner, and try again!", id="gameover-stats")
+            yield Button("RETRY / NEW JOURNEY", id="btn-restart", classes="restart-btn retry-btn")
+            
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-restart":
+            event.button.disabled = True
+            self.dismiss(result="restart")
+
+#-------------------------
+# Starter Choice Screen
+#-------------------------
+class StarterScreen(Screen):
+    def __init__(self, pokedex, **kwargs):
+        super().__init__(**kwargs)
+        self.pokedex = pokedex
+        self.partner_selected = False
+        
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="starter-panel"):
+            yield Static("★ CHOOSE YOUR PARTNER ★", classes="starter-title")
+            
+            if not self.pokedex:
+                yield Static("Your PokéDex is empty! Select a classic Starter Pokémon to begin:", classes="starter-subtitle")
+                with Horizontal(classes="starter-cards"):
+                    yield Button("Bulbasaur (Lvl 5)", id="starter-bulbasaur", classes="starter-card-btn")
+                    yield Button("Charmander (Lvl 5)", id="starter-charmander", classes="starter-card-btn")
+                    yield Button("Squirtle (Lvl 5)", id="starter-squirtle", classes="starter-card-btn")
+            else:
+                yield Static("Select your starting partner from your PokéDex or choice of classic starters:", classes="starter-subtitle")
+                with Horizontal(classes="starter-choice-container"):
+                    with Vertical(classes="classic-starters-column"):
+                        yield Static("Classic Starters:", classes="column-title")
+                        yield Button("Bulbasaur (Lvl 5)", id="starter-bulbasaur", classes="starter-card-btn")
+                        yield Button("Charmander (Lvl 5)", id="starter-charmander", classes="starter-card-btn")
+                        yield Button("Squirtle (Lvl 5)", id="starter-squirtle", classes="starter-card-btn")
+                    with Vertical(classes="pokedex-starters-column"):
+                        yield Static("From your PokéDex:", classes="column-title")
+                        yield ListView(id="starter-pokedex-list")
+                        
+    def on_mount(self) -> None:
+        if self.pokedex:
+            pokedex_list = self.query_one("#starter-pokedex-list")
+            for poke_id, poke in self.pokedex.items():
+                shiny_tag = " ✨" if poke["shiny"] else ""
+                label_text = f"{poke_id} - {poke['name'].capitalize()} (Lvl {poke['level']}){shiny_tag}"
+                item = ListItem(Label(label_text))
+                item.poke_data = poke
+                pokedex_list.append(item)
+                
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.button.disabled = True
+        button_id = event.button.id
+        if button_id == "starter-bulbasaur":
+            self.select_partner(Pokemon("bulbasaur", level=5))
+        elif button_id == "starter-charmander":
+            self.select_partner(Pokemon("charmander", level=5))
+        elif button_id == "starter-squirtle":
+            self.select_partner(Pokemon("squirtle", level=5))
+            
+    @on(ListView.Selected)
+    def handle_pokedex_selected(self, event: ListView.Selected) -> None:
+        if not event.item or not getattr(event.item, "poke_data", None):
+            return
+        poke_data = event.item.poke_data
+        partner = Pokemon(
+            poke_data["name"], 
+            poke_data["shiny"], 
+            poke_data["level"], 
+            poke_data.get("xp", 0)
+        )
+        self.select_partner(partner)
+        
+    def select_partner(self, pokemon) -> None:
+        if self.partner_selected:
+            return
+        self.partner_selected = True
+        self.app.set_starting_partner(pokemon)
+        self.dismiss()
 
 #-------------------------
 # TUI App
@@ -205,7 +322,7 @@ class PokeCatcherApp(App):
     /* Catch Area Styles */
     .catch-layout {
         layout: horizontal;
-        height: 30;
+        height: 38;
     }
     
     .catch-control-panel {
@@ -217,13 +334,48 @@ class PokeCatcherApp(App):
         align: center middle;
     }
     
-    .spawn-sprite-panel {
+    .combatants-panel {
         width: 65%;
         height: 100%;
         background: #08090f;
         border: round #2c3144;
+        layout: horizontal;
+    }
+
+    .combatant-subpanel {
+        width: 50%;
+        height: 100%;
         padding: 1;
-        overflow: auto;
+        align: center middle;
+    }
+
+    .wild-subpanel {
+        border-right: solid #1c2134;
+    }
+
+    .combatant-header {
+        text-style: bold;
+        color: #ff5555;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    .active-subpanel .combatant-header {
+        color: #00ffaa;
+    }
+
+    .combatant-sprite {
+        height: 22;
+        width: 100%;
+        content-align: center middle;
+        overflow: hidden;
+        margin-bottom: 1;
+    }
+
+    .combatant-details {
+        text-align: center;
+        color: #ffffff;
+        text-style: bold;
     }
     
     .shiny-glow {
@@ -267,11 +419,12 @@ class PokeCatcherApp(App):
     }
     
     .status-panel {
-        height: auto;
+        height: 14;
+        overflow-y: scroll;
         background: #11121d;
         border: solid #2c3144;
         padding: 0 1;
-        text-align: center;
+        text-align: left;
         text-style: bold;
         color: #ffcc00;
     }
@@ -471,13 +624,176 @@ class PokeCatcherApp(App):
         text-style: bold;
         height: 3;
     }
+    
+    #btn-battle {
+        background: #3a0088;
+        color: white;
+        text-style: bold;
+        border: tall #8800ff;
+    }
+    
+    #btn-battle:hover {
+        background: #5a00aa;
+    }
+
+    .team-header-layout {
+        height: 5;
+        margin-bottom: 1;
+        align: center middle;
+    }
+    
+    #team-header-title {
+        width: 70%;
+        height: 100%;
+        color: #ffcc00;
+        text-style: bold;
+        text-align: center;
+        background: #161925;
+        border: solid #2c3144;
+        padding: 1 0;
+        margin: 0;
+    }
+
+    .heal-team-btn {
+        width: 30%;
+        height: 100%;
+        background: #008855;
+        color: white;
+        border: solid #00ffaa;
+        text-style: bold;
+        margin: 0 0 0 1;
+    }
+
+    .heal-team-btn:hover {
+        background: #00aa66;
+    }
+
+    .slot-stat-label {
+        text-align: center;
+        margin-bottom: 0;
+        color: #8f9bb3;
+    }
+
+    .team-slot.fainted {
+        background: #141419;
+        border: round #555555;
+    }
+
+    .team-slot.fainted .slot-name {
+        color: #555555;
+        text-style: strike;
+    }
+
+    StarterScreen {
+        align: center middle;
+        background: rgba(13, 14, 21, 0.95);
+    }
+    
+    StarterScreen .starter-panel {
+        background: #161925;
+        border: round #00ffaa;
+        padding: 2 4;
+        align: center middle;
+        width: 80%;
+        height: auto;
+        max-height: 28;
+    }
+    
+    StarterScreen .starter-title {
+        color: #ffcc00;
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+    }
+    
+    StarterScreen .starter-subtitle {
+        color: #c5cdd8;
+        text-align: center;
+        margin-bottom: 2;
+    }
+
+    .starter-cards {
+        layout: horizontal;
+        height: 5;
+        align: center middle;
+    }
+
+    .starter-card-btn {
+        margin: 0 1;
+        width: 25;
+        height: 3;
+        background: #1f2335;
+        color: #00ffaa;
+        border: tall #00ffaa;
+    }
+
+    .starter-card-btn:hover {
+        background: #2a304b;
+    }
+
+    .starter-choice-container {
+        layout: horizontal;
+        height: 16;
+    }
+
+    .classic-starters-column {
+        width: 40%;
+        height: 100%;
+        align: center middle;
+    }
+
+    .classic-starters-column Button {
+        margin: 1 0;
+        width: 100%;
+    }
+
+    .pokedex-starters-column {
+        width: 60%;
+        height: 100%;
+        margin-left: 2;
+        border-left: solid #2c3144;
+        padding-left: 2;
+    }
+
+    #starter-pokedex-list {
+        background: #0d0e15;
+        border: solid #2c3144;
+        height: 12;
+        overflow-y: auto;
+    }
+
+    .column-title {
+        text-style: bold;
+        margin-bottom: 1;
+        color: #ffffff;
+    }
+
+    .fainted-panel {
+        border: round #ff5555;
+    }
+    
+    .fainted-title {
+        color: #ff5555;
+    }
+    
+    .retry-btn {
+        background: #331f23;
+        color: #ff5555;
+        border: tall #ff5555;
+    }
+    
+    .retry-btn:hover {
+        background: #4d2b31;
+    }
     """
     
     # BINDINGS
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("c", "catch", "Catch Pokemon"),
+        ("c", "catch", "Catch"),
+        ("b", "battle", "Battle"),
         ("r", "run", "Run/Next"),
+        ("h", "heal", "Heal Team"),
     ]
     
     # State reactive properties
@@ -504,14 +820,25 @@ class PokeCatcherApp(App):
                         
                         with Vertical(classes="catch-buttons"):
                             yield Button("CATCH (C)", id="btn-catch")
+                            yield Button("BATTLE (B)", id="btn-battle")
                             yield Button("RUN / NEXT (R)", id="btn-run")
                             
                         yield Static("Ready to start catching!", id="status-display", classes="status-panel")
                     
-                    yield Static("", id="spawn-sprite", classes="spawn-sprite-panel")
+                    with Horizontal(classes="combatants-panel"):
+                        with Vertical(classes="combatant-subpanel wild-subpanel"):
+                            yield Static("WILD POKEMON", classes="combatant-header")
+                            yield Static("", id="wild-sprite", classes="combatant-sprite")
+                            yield Static("", id="wild-details", classes="combatant-details")
+                        with Vertical(classes="combatant-subpanel active-subpanel"):
+                            yield Static("YOUR ACTIVE PARTNER", classes="combatant-header")
+                            yield Static("", id="active-sprite", classes="combatant-sprite")
+                            yield Static("", id="active-details", classes="combatant-details")
                             
             with TabPane("My Team", id="tab-team"):
-                yield Static("YOUR POKEMON TEAM (Max 6)", classes="team-header-title")
+                with Horizontal(classes="team-header-layout"):
+                    yield Static("YOUR POKEMON TEAM (Max 6)", classes="team-header-title", id="team-header-title")
+                    yield Button("HEAL TEAM (H)", id="btn-heal-team", classes="heal-team-btn")
                 with ScrollableContainer(id="team-scroll-container"):
                     with Grid(id="team-grid", classes="team-grid"):
                         for i in range(6):
@@ -519,6 +846,8 @@ class PokeCatcherApp(App):
                                 yield Static("", id=f"slot-sprite-{i}", classes="team-slot-sprite")
                                 yield Static("Empty Slot", id=f"slot-name-{i}", classes="slot-name")
                                 yield Static("-", id=f"slot-details-{i}", classes="slot-details")
+                                yield Static("", id=f"slot-hp-{i}", classes="slot-stat-label")
+                                yield Static("", id=f"slot-xp-{i}", classes="slot-stat-label")
                                 yield Button("Release", id=f"btn-release-{i}", classes="release-btn")
                             
             with TabPane("Pokedex", id="tab-pokedex"):
@@ -537,6 +866,7 @@ class PokeCatcherApp(App):
         self.spawn_new_pokemon()
         self.update_team_view()
         self.update_pokedex_view()
+        self.push_screen(StarterScreen(self.pokedex))
 
     def spawn_new_pokemon(self) -> None:
         if self.game_over:
@@ -556,9 +886,14 @@ class PokeCatcherApp(App):
         else:
             self.query_one("#spawn-shiny-label").update("Normal")
             
-        # Get Sprite
-        sprite_text = self.current_pokemon.get_sprite(include_info=False)
-        self.query_one("#spawn-sprite").update(Text.from_ansi(sprite_text))
+        # Update wild combatant
+        self.query_one("#wild-sprite").update(Text.from_ansi(self.current_pokemon.get_sprite(include_info=False)))
+        
+        wild_shiny_tag = " ✨" if self.current_pokemon.shiny else ""
+        wild_hp_bar = self.make_bar(self.current_pokemon.hp, self.current_pokemon.max_hp)
+        self.query_one("#wild-details").update(
+            f"{self.current_pokemon.name.capitalize()} (Lvl {self.current_pokemon.level}){wild_shiny_tag}\nHP: {self.current_pokemon.hp}/{self.current_pokemon.max_hp} [{wild_hp_bar}]"
+        )
 
     def action_catch(self) -> None:
         if self.game_over or len(self.team) >= team_size:
@@ -617,7 +952,12 @@ class PokeCatcherApp(App):
         stat_text += f"You now have {len(self.pokedex)} / {len(pokemons)} pokemons in your pokedex ({len(self.pokedex)/len(pokemons)*100:.1f}% completion)!"
         
         self.update_pokedex_view()
-        self.push_screen(VictoryScreen(stat_text))
+        
+        def check_restart(result):
+            if result == "restart":
+                self.set_timer(0.05, self.restart_journey)
+                
+        self.push_screen(VictoryScreen(stat_text), check_restart)
 
 
     def restart_journey(self) -> None:
@@ -626,6 +966,22 @@ class PokeCatcherApp(App):
         self.query_one("#status-display").update("A new journey begins! Good luck!")
         self.update_team_view()
         self.spawn_new_pokemon()
+        self.push_screen(StarterScreen(self.pokedex))
+
+    def set_starting_partner(self, pokemon: Pokemon) -> None:
+        self.team = [pokemon]
+        self.notify(f"Selected {pokemon.name.capitalize()} as your starting partner!", severity="information")
+        self.update_team_view()
+        self.pokedex = save_team_in_pokedex([pokemon], self.pokedex)
+        self.update_pokedex_view()
+
+    def make_bar(self, current, maximum, filled_char="█", empty_char="░", width=10) -> str:
+        if maximum <= 0:
+            return ""
+        ratio = max(0.0, min(1.0, current / maximum))
+        filled_count = int(ratio * width)
+        empty_count = width - filled_count
+        return filled_char * filled_count + empty_char * empty_count
 
     def update_team_view(self) -> None:
         for i in range(6):
@@ -633,13 +989,31 @@ class PokeCatcherApp(App):
             slot_sprite = self.query_one(f"#slot-sprite-{i}")
             slot_name = self.query_one(f"#slot-name-{i}")
             slot_details = self.query_one(f"#slot-details-{i}")
+            slot_hp = self.query_one(f"#slot-hp-{i}")
+            slot_xp = self.query_one(f"#slot-xp-{i}")
             release_btn = self.query_one(f"#btn-release-{i}")
             
             if i < len(self.team):
                 poke = self.team[i]
                 slot_name.update(f"{poke.name.capitalize()}")
                 shiny_tag = " [bold magenta]✨ Shiny ✨[/bold magenta]" if poke.shiny else ""
-                slot_details.update(f"ID: {poke.id} | Lvl [bold red]{poke.level}[/bold red]{shiny_tag}")
+                
+                if poke.hp == 0:
+                    status_lbl = " [bold red][FAINTED][/bold red]"
+                else:
+                    status_lbl = ""
+                
+                slot_details.update(f"ID: {poke.id} | Lvl [bold red]{poke.level}[/bold red]{shiny_tag}{status_lbl}")
+                
+                # HP Bar
+                hp_bar = self.make_bar(poke.hp, poke.max_hp)
+                slot_hp.update(f"HP: {poke.hp}/{poke.max_hp} [{hp_bar}]")
+                slot_hp.styles.display = "block"
+                
+                # XP Bar
+                xp_bar = self.make_bar(poke.xp, poke.xp_to_next_level)
+                slot_xp.update(f"XP: {poke.xp}/{poke.xp_to_next_level} [{xp_bar}]")
+                slot_xp.styles.display = "block"
                 
                 # Fetch sprite without title/info
                 sprite_ansi = poke.get_sprite(include_info=False)
@@ -649,17 +1023,152 @@ class PokeCatcherApp(App):
                 release_btn.styles.display = "block"
                 
                 # Dynamic style classes
-                slot_card.remove_class("filled", "shiny-pokemon")
+                slot_card.remove_class("filled", "shiny-pokemon", "fainted")
                 slot_card.add_class("filled")
                 if poke.shiny:
                     slot_card.add_class("shiny-pokemon")
+                if poke.hp == 0:
+                    slot_card.add_class("fainted")
             else:
                 slot_name.update("Empty Slot")
                 slot_details.update("-")
+                slot_hp.update("")
+                slot_hp.styles.display = "none"
+                slot_xp.update("")
+                slot_xp.styles.display = "none"
                 slot_sprite.update("")
                 slot_sprite.styles.display = "none"
                 release_btn.styles.display = "none"
-                slot_card.remove_class("filled", "shiny-pokemon")
+                slot_card.remove_class("filled", "shiny-pokemon", "fainted")
+
+        self.update_active_combatant_display()
+
+    def update_active_combatant_display(self) -> None:
+        active_member = None
+        for member in self.team:
+            if member.hp > 0:
+                active_member = member
+                break
+        if not active_member and len(self.team) > 0:
+            active_member = self.team[0]
+            
+        if active_member:
+            self.query_one("#active-sprite").update(Text.from_ansi(active_member.get_sprite(include_info=False)))
+            active_shiny_tag = " ✨" if active_member.shiny else ""
+            active_hp_bar = self.make_bar(active_member.hp, active_member.max_hp)
+            status_lbl = " [bold red][FAINTED][/bold red]" if active_member.hp == 0 else ""
+            self.query_one("#active-details").update(
+                f"{active_member.name.capitalize()} (Lvl {active_member.level}){active_shiny_tag}{status_lbl}\nHP: {active_member.hp}/{active_member.max_hp} [{active_hp_bar}]"
+            )
+        else:
+            self.query_one("#active-sprite").update("")
+            self.query_one("#active-details").update("No Active Pokémon\nSelect partner first")
+
+    def action_battle(self) -> None:
+        if self.game_over:
+            return
+            
+        wild_poke = self.current_pokemon
+        if not wild_poke:
+            return
+            
+        # Get first non-fainted team member
+        active_member = None
+        for member in self.team:
+            if member.hp > 0:
+                active_member = member
+                break
+                
+        if not active_member:
+            if len(self.team) == 0:
+                self.notify("You have no Pokémon in your team to battle!", severity="error")
+                self.query_one("#status-display").update("[bold red]No team members to battle! Catch one first.[/bold red]")
+            else:
+                self.notify("All your Pokémon are fainted! Heal them first.", severity="error")
+                self.query_one("#status-display").update("[bold red]All your team members are fainted! Use Heal (H).[/bold red]")
+            return
+
+        # Start simulated battle
+        battle_log = []
+        battle_log.append(f"[bold magenta]BATTLE START![/bold magenta] Go, [yellow]{active_member.name.capitalize()}[/yellow]! (Lvl {active_member.level})")
+        battle_log.append(f"vs wild [red]{wild_poke.name.capitalize()}[/red] (Lvl {wild_poke.level})")
+        
+        # Turn-based loop
+        round_num = 1
+        while active_member.hp > 0 and wild_poke.hp > 1:  # Weaken to at least 1 HP
+            # Player attacks
+            player_dmg = randint(int(active_member.level * 0.5) + 1, int(active_member.level * 1.5) + 3)
+            wild_poke.hp = max(1, wild_poke.hp - player_dmg)
+            battle_log.append(f"R{round_num}: {active_member.name.capitalize()} dealt [green]{player_dmg} DMG[/green]! (Wild HP: {wild_poke.hp}/{wild_poke.max_hp})")
+            
+            if wild_poke.hp <= 1:
+                break
+                
+            # Wild attacks back
+            wild_dmg = randint(int(wild_poke.level * 0.5) + 1, int(wild_poke.level * 1.5) + 3)
+            active_member.hp = max(0, active_member.hp - wild_dmg)
+            battle_log.append(f"R{round_num}: Wild {wild_poke.name.capitalize()} dealt [red]{wild_dmg} DMG[/red]! ({active_member.name.capitalize()} HP: {active_member.hp}/{active_member.max_hp})")
+            
+            round_num += 1
+            if round_num > 5:
+                break
+                
+        # Resolve battle
+        if wild_poke.hp <= 1:
+            battle_log.append(f"[bold green]VICTORY![/bold green] Wild {wild_poke.name.capitalize()} is extremely weakened!")
+            xp_gained = wild_poke.level * 3
+            leveled_up = active_member.gain_xp(xp_gained)
+            battle_log.append(f"{active_member.name.capitalize()} gained [blue]{xp_gained} XP[/blue]!")
+            if leveled_up:
+                battle_log.append(f"🎉 [bold yellow]LEVEL UP![/bold yellow] {active_member.name.capitalize()} grew to [bold red]Level {active_member.level}[/bold red]!")
+                self.notify(f"{active_member.name.capitalize()} leveled up to {active_member.level}!", severity="information")
+        elif active_member.hp == 0:
+            battle_log.append(f"[bold red]DEFEAT![/bold red] {active_member.name.capitalize()} fainted!")
+            self.notify(f"{active_member.name.capitalize()} fainted!", severity="warning")
+            
+            # Check if all fainted
+            all_fainted = all(member.hp <= 0 for member in self.team)
+            if all_fainted:
+                self.game_over = True
+                def check_restart(result):
+                    if result == "restart":
+                        self.set_timer(0.05, self.restart_journey)
+                self.push_screen(GameOverScreen(), check_restart)
+        else:
+            battle_log.append(f"The battle timed out! Wild {wild_poke.name.capitalize()} is weakened.")
+
+        # Update displays
+        self.query_one("#status-display").update("\n".join(battle_log))
+        self.query_one("#spawn-level-label").update(f"Level: [bold red]{wild_poke.level}[/bold red] (HP: {wild_poke.hp}/{wild_poke.max_hp})")
+        
+        wild_shiny_tag = " ✨" if wild_poke.shiny else ""
+        wild_hp_bar = self.make_bar(wild_poke.hp, wild_poke.max_hp)
+        self.query_one("#wild-details").update(
+            f"{wild_poke.name.capitalize()} (Lvl {wild_poke.level}){wild_shiny_tag}\nHP: {wild_poke.hp}/{wild_poke.max_hp} [{wild_hp_bar}]"
+        )
+        
+        self.update_team_view()
+
+    def heal_team(self) -> None:
+        if self.game_over:
+            return
+            
+        healed_any = False
+        for member in self.team:
+            if member.hp < member.max_hp:
+                member.hp = member.max_hp
+                healed_any = True
+                
+        if healed_any:
+            self.notify("Your team was fully healed! Spawning a new wild Pokémon...", severity="information")
+            self.query_one("#status-display").update("[bold green]Your team was fully healed! Spawning a new wild Pokémon...[/bold green]")
+            self.update_team_view()
+            self.spawn_new_pokemon()
+        else:
+            self.notify("Your team is already at full health.", severity="normal")
+
+    def action_heal(self) -> None:
+        self.heal_team()
 
     def update_pokedex_view(self) -> None:
         pokedex_list = self.query_one("#pokedex-list")
@@ -691,8 +1200,12 @@ class PokeCatcherApp(App):
         button_id = event.button.id
         if button_id == "btn-catch":
             self.action_catch()
+        elif button_id == "btn-battle":
+            self.action_battle()
         elif button_id == "btn-run":
             self.action_run()
+        elif button_id == "btn-heal-team":
+            self.heal_team()
         elif button_id == "btn-restart":
             self.restart_journey()
         elif button_id and button_id.startswith("btn-release-"):
@@ -708,7 +1221,13 @@ class PokeCatcherApp(App):
         if poke_id in self.pokedex:
             poke_data = self.pokedex[poke_id]
             # Create a temporary Pokemon to load sprite and info
-            temp_poke = Pokemon(poke_data["name"], poke_data["shiny"], poke_data["level"])
+            temp_poke = Pokemon(
+                poke_data["name"], 
+                poke_data["shiny"], 
+                poke_data["level"], 
+                poke_data.get("xp", 0), 
+                poke_data.get("hp", None)
+            )
             sprite_ansi = temp_poke.get_sprite(include_info=True)
             
             self.query_one("#pokedex-detail-view").update(Text.from_ansi(sprite_ansi))
