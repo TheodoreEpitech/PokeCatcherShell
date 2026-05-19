@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-if [[ "$1" == "--tui" || "$1" == "-t" ]]; then
-  COLORTERM=truecolor FORCE_COLOR=1 python3 tui.py
+if [[ "$1" == "--cli" || "$1" == "-c" ]]; then
+  python3 old.py
 else
-  python3 main.py
+  COLORTERM=truecolor FORCE_COLOR=1 python3 main.py
 fi

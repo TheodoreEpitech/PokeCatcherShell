@@ -28,7 +28,7 @@
 
           shellHook = ''
             echo "Welcome to PokeCatcherShell!"
-            echo "Run 'python main.py' or 'python tui.py' to start catching pokemons."
+            echo "Run 'python main.py' for TUI mode, or 'python old.py' for classic CLI mode."
           '';
         };
       }
