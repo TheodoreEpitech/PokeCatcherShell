@@ -192,21 +192,21 @@ def save_team_in_pokedex(team, pokedex):
 def get_action(pokemon, team, pokedex):
     clear_terminal()
     pokemon.show()
-    temp = input("List of actions:\n- 1: Catch\n- 2: Continue\n- 3: Show Team\n- 4: Show Pokedex\n- 5: Exit\n- 6: Battle\n- 7: Heal Team\n")
+    temp = input("List of actions:\n- 1: Catch\n- 2: Battle\n- 3: Continue\n- 4: Show Team\n- 5: Show Pokedex\n- 6: Heal Team\n- 7: Exit\n")
     match temp:
         case ("1"):
             if pokemon.catch(team):
                 pokedex = save_team_in_pokedex([pokemon], pokedex)
             return pokedex
-        case ("2"):
-            return pokedex
         case ("3"):
-            show_team(team)
+            return pokedex
         case ("4"):
-            show_pokedex(pokedex)
+            show_team(team)
         case ("5"):
+            show_pokedex(pokedex)
+        case ("7"):
             exit()
-        case ("6"):
+        case ("2"):
             active_member = None
             for member in team:
                 if member.hp > 0:
@@ -250,7 +250,7 @@ def get_action(pokemon, team, pokedex):
                 else:
                     print(f"\nThe battle timed out! Wild {pokemon.name.capitalize()} is weakened.")
             input("\nPress Enter to continue...")
-        case ("7"):
+        case ("6"):
             healed = False
             for member in team:
                 if member.hp < member.max_hp:
